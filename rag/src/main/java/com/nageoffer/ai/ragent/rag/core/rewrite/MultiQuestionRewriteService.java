@@ -23,14 +23,16 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.nageoffer.ai.ragent.infra.util.LLMResponseCleaner;
-import com.nageoffer.ai.ragent.rag.config.RAGConfigProperties;
 import com.nageoffer.ai.ragent.framework.convention.ChatMessage;
 import com.nageoffer.ai.ragent.framework.convention.ChatRequest;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.framework.trace.RagTraceNode;
 import com.nageoffer.ai.ragent.infra.chat.LLMService;
 import com.nageoffer.ai.ragent.infra.enums.Tier;
+import com.nageoffer.ai.ragent.infra.util.LLMResponseCleaner;
+import com.nageoffer.ai.ragent.rag.config.RAGConfigProperties;
 import com.nageoffer.ai.ragent.rag.core.prompt.PromptTemplateLoader;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -76,15 +78,22 @@ public class MultiQuestionRewriteService implements QueryRewriteService {
     @Override
     @RagTraceNode(name = "query-rewrite-and-split", type = "REWRITE")
     public RewriteResult rewriteWithSplit(String userQuestion, List<ChatMessage> history) {
+        RagTraceContext.record("input", RagTraceData.map("originalQuestion", userQuestion,
+                "historyCount", history == null ? 0 : history.size()));
         if (!ragConfigProperties.getQueryRewriteEnabled()) {
             String normalized = queryTermMappingService.normalize(userQuestion);
             List<String> subs = ruleBasedSplit(normalized);
+            RagTraceContext.record("decision", RagTraceData.map("strategy", "RULE_BASED", "modelRewriteEnabled", false));
+            RagTraceContext.record("output", RagTraceData.map("rewrittenQuestion", normalized, "subQuestions", subs));
             return new RewriteResult(normalized, subs);
         }
 
         String normalizedQuestion = queryTermMappingService.normalize(userQuestion);
 
-        return callLLMRewriteAndSplit(normalizedQuestion, userQuestion, history);
+        RewriteResult result = callLLMRewriteAndSplit(normalizedQuestion, userQuestion, history);
+        RagTraceContext.record("output", RagTraceData.map("rewrittenQuestion", result.rewrittenQuestion(),
+                "subQuestions", result.subQuestions()));
+        return result;
     }
 
     private RewriteResult callLLMRewriteAndSplit(String normalizedQuestion,
@@ -99,8 +108,10 @@ public class MultiQuestionRewriteService implements QueryRewriteService {
         RewriteResult result;
         try {
             RewriteResult parsed = parseRewriteAndSplit(llmService.chat(req, Tier.FAST));
+            if (parsed == null) RagTraceContext.event("DEGRADED", "REWRITE_PARSE_ERROR");
             result = parsed != null ? parsed : fallback;
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "REWRITE_MODEL_ERROR: " + e.getClass().getSimpleName());
             log.warn("查询改写 LLM 调用失败，使用归一化问题兜底", e);
             result = fallback;
         }

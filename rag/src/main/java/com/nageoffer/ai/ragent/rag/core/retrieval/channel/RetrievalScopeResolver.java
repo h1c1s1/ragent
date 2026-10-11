@@ -18,10 +18,13 @@
 package com.nageoffer.ai.ragent.rag.core.retrieval.channel;
 
 import cn.hutool.core.collection.CollUtil;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceNode;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.intent.NodeScore;
 import com.nageoffer.ai.ragent.rag.core.intent.NodeScoreFilters;
 import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -51,29 +54,36 @@ public class RetrievalScopeResolver {
      * <p>
      * 只看 KB 意图最高分：达到置信阈值才收窄，意图个数不参与判定——多一个低分意图不应让系统更准确
      */
+    @RagTraceNode(name = "retrieval-scope", type = "RETRIEVAL_SCOPE")
     public RetrievalScope resolve(List<SubQuestionIntent> subIntents) {
+        RagTraceContext.record("input", RagTraceData.map("subQuestions", RagTraceData.subIntents(subIntents),
+                "confidenceThreshold", properties.getScope().getConfidenceThreshold(),
+                "minIntentScore", properties.getScope().getMinIntentScore()));
         List<String> activeCollections = kbCollectionProvider.listActiveCollections();
+        RagTraceContext.record("activeCollections", activeCollections);
         List<NodeScore> kbIntents = extractKbIntents(subIntents);
         double topScore = kbIntents.stream().mapToDouble(NodeScore::getScore).max().orElse(0.0);
 
         if (kbIntents.isEmpty()) {
             log.info("未识别出有效 KB 意图，检索走全局作用域");
-            return RetrievalScope.global(topScore, activeCollections);
+            return traceScope(RetrievalScope.global(topScore, activeCollections), "NO_VALID_KB_INTENT");
         }
         double threshold = properties.getScope().getConfidenceThreshold();
         if (topScore < threshold) {
             log.info("KB 意图置信度过低（{} < {}），检索走全局作用域", topScore, threshold);
-            return RetrievalScope.global(topScore, activeCollections);
+            return traceScope(RetrievalScope.global(topScore, activeCollections), "LOW_CONFIDENCE");
         }
 
         Set<String> bound = new LinkedHashSet<>(NodeScoreFilters.kbCollections(kbIntents));
+        RagTraceContext.record("collectionBindings", RagTraceData.map("boundCollections", bound,
+                "inactiveCollections", bound.stream().filter(collection -> !activeCollections.contains(collection)).toList()));
         // 意图绑定与知识库表是两套数据，删库不回写意图节点：悬空库名对向量 / ES 只是查空库，
         // 图谱却会按库名匹配到已删库的图谱残留，故绑定集先与有效库求交
         Set<String> targets = new LinkedHashSet<>(bound);
         targets.retainAll(activeCollections);
         if (targets.isEmpty()) {
             log.warn("KB 意图绑定的知识库均已失效（{}），检索退化为全局作用域", bound);
-            return RetrievalScope.global(topScore, activeCollections);
+            return traceScope(RetrievalScope.global(topScore, activeCollections), "BOUND_COLLECTIONS_INACTIVE");
         }
         if (targets.size() < bound.size()) {
             bound.removeAll(targets);
@@ -83,7 +93,7 @@ public class RetrievalScopeResolver {
                 .filter(collection -> !targets.contains(collection))
                 .toList();
         log.info("KB 意图置信度充足（{}），检索收窄到 {} 个命中库，补充范围 {} 个库", topScore, targets.size(), supplement.size());
-        return new RetrievalScope(true, topScore, kbIntents, List.copyOf(targets), supplement);
+        return traceScope(new RetrievalScope(true, topScore, kbIntents, List.copyOf(targets), supplement), "CONFIDENT_KB_INTENT");
     }
 
     /**
@@ -95,6 +105,14 @@ public class RetrievalScopeResolver {
      * <p>
      * 绑定为空的意图既检索不到东西，也不该拉高置信度判定
      */
+    private RetrievalScope traceScope(RetrievalScope scope, String reason) {
+        RagTraceContext.record("decision", RagTraceData.map("scope", scope.directed() ? "DIRECTED" : "GLOBAL", "reason", reason));
+        RagTraceContext.record("output", RagTraceData.map("topScore", scope.topScore(),
+                "intents", RagTraceData.intents(scope.intents()), "targetCollections", scope.targetCollections(),
+                "supplementCollections", scope.supplementCollections()));
+        return scope;
+    }
+
     private List<NodeScore> extractKbIntents(List<SubQuestionIntent> subIntents) {
         if (CollUtil.isEmpty(subIntents)) {
             return List.of();

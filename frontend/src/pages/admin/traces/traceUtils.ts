@@ -3,7 +3,7 @@ import type { RagTraceNode } from "@/services/ragTraceService";
 export const PAGE_SIZE = 10;
 
 /** 过滤条件直接按库里的原始值做等值查询，取值须与后端写入的常量保持一致 */
-export type TraceStatus = "" | "SUCCESS" | "ERROR" | "RUNNING";
+export type TraceStatus = "" | "SUCCESS" | "ERROR" | "RUNNING" | "CANCELLED";
 
 export type TraceFilters = {
   traceId: string;
@@ -31,7 +31,8 @@ export const STATUS_OPTIONS: { value: TraceStatus; label: string }[] = [
   { value: "", label: "全部状态" },
   { value: "RUNNING", label: "运行中" },
   { value: "SUCCESS", label: "成功" },
-  { value: "ERROR", label: "失败" }
+  { value: "ERROR", label: "失败" },
+  { value: "CANCELLED", label: "已取消" }
 ];
 
 // 后端写入的链路状态是 RUNNING / SUCCESS / ERROR / CANCELLED，这里统一归一成前端语义，各处只比归一后的值
@@ -99,9 +100,9 @@ export const nodeTypeChipClass = (type?: string | null): string => {
   if (normalized === "LLM_PROVIDER") return "bg-orange-100 text-orange-700";
   if (normalized === "LLM_ROUTING") return "bg-amber-100 text-amber-700";
   if (normalized === "GUIDANCE") return "bg-violet-100 text-violet-700";
-  if (normalized === "INTENT") return "bg-sky-100 text-sky-700";
+  if (normalized === "INTENT" || normalized === "INTENT_CLASSIFY") return "bg-sky-100 text-sky-700";
   if (normalized === "REWRITE") return "bg-teal-100 text-teal-700";
-  if (normalized === "RETRIEVE" || normalized === "RAG_NODE") return "bg-blue-100 text-blue-700";
+  if (normalized.startsWith("RETRIEV") || normalized === "RAG_NODE") return "bg-blue-100 text-blue-700";
   if (normalized === "TITLE_GEN") return "bg-stone-100 text-stone-700";
   if (normalized.startsWith("MCP")) return "bg-cyan-100 text-cyan-700";
   return "bg-slate-100 text-slate-600";
@@ -122,9 +123,23 @@ const NODE_NAME_DISPLAY: Record<string, string> = {
   "aihubmix-stream-chat": "AIHubMix · 流式",
   "query-rewrite-and-split": "问题改写与拆分",
   "intent-resolve": "意图识别",
+  "intent-classify": "子问题意图分类",
   "guidance-detect": "歧义引导",
   "retrieval-engine": "知识库检索",
+  "agent-knowledge-search": "Agent 知识库搜索",
+  "retrieval-subquestion": "子问题检索",
+  "retrieval-scope": "检索范围决策",
   "multi-channel-retrieval": "多路召回",
+  "retrieve-vector": "向量召回",
+  "retrieve-keyword": "关键词召回",
+  "retrieve-graph": "图谱召回",
+  "deduplication": "候选去重",
+  "fusion": "候选融合",
+  "rerank": "候选精排",
+  "evidencegate": "证据门控",
+  "metadataenrichment": "文档元数据补齐",
+  "context-format": "证据上下文格式化",
+  "retrieval-context": "实际知识上下文",
   "context-build": "上下文组装",
   "prompt-render": "Prompt 渲染",
   "conversation-title-gen": "会话标题生成",

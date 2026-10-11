@@ -52,7 +52,19 @@ public class RagTraceRecordServiceImpl implements RagTraceRecordService {
                 .durationMs(durationMs)
                 .build();
         runMapper.update(update, Wrappers.lambdaUpdate(RagTraceRunDO.class)
-                .eq(RagTraceRunDO::getTraceId, traceId));
+                .eq(RagTraceRunDO::getTraceId, traceId)
+                .eq(RagTraceRunDO::getStatus, "RUNNING"));
+    }
+
+    @Override
+    public void cancelRunsByTask(String taskId) {
+        if (taskId == null || taskId.isBlank()) return;
+        Date end = new Date();
+        for (RagTraceRunDO run : runMapper.selectList(Wrappers.lambdaQuery(RagTraceRunDO.class)
+                .eq(RagTraceRunDO::getTaskId, taskId).eq(RagTraceRunDO::getStatus, "RUNNING"))) {
+            finishRun(run.getTraceId(), "CANCELLED", null, end,
+                    run.getStartTime() == null ? 0 : Math.max(0, end.getTime() - run.getStartTime().getTime()));
+        }
     }
 
     @Override
@@ -62,14 +74,22 @@ public class RagTraceRecordServiceImpl implements RagTraceRecordService {
 
     @Override
     public void finishNode(String traceId, String nodeId, String status, String errorMessage, Date endTime, long durationMs) {
+        finishNode(traceId, nodeId, status, errorMessage, endTime, durationMs, null);
+    }
+
+    @Override
+    public void finishNode(String traceId, String nodeId, String status, String errorMessage,
+                           Date endTime, long durationMs, String extraData) {
         RagTraceNodeDO update = RagTraceNodeDO.builder()
                 .status(status)
                 .errorMessage(errorMessage)
                 .endTime(endTime)
                 .durationMs(durationMs)
+                .extraData(extraData)
                 .build();
         nodeMapper.update(update, Wrappers.lambdaUpdate(RagTraceNodeDO.class)
                 .eq(RagTraceNodeDO::getTraceId, traceId)
-                .eq(RagTraceNodeDO::getNodeId, nodeId));
+                .eq(RagTraceNodeDO::getNodeId, nodeId)
+                .eq(RagTraceNodeDO::getStatus, "RUNNING"));
     }
 }

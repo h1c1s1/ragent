@@ -19,11 +19,6 @@ package com.nageoffer.ai.ragent.rag.service.handler;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
-import com.nageoffer.ai.ragent.rag.dao.entity.ConversationDO;
-import com.nageoffer.ai.ragent.rag.dto.CompletionPayload;
-import com.nageoffer.ai.ragent.rag.dto.MessageDelta;
-import com.nageoffer.ai.ragent.rag.dto.MetaPayload;
-import com.nageoffer.ai.ragent.rag.enums.SSEEventType;
 import com.nageoffer.ai.ragent.framework.context.UserContext;
 import com.nageoffer.ai.ragent.framework.convention.ChatMessage;
 import com.nageoffer.ai.ragent.framework.convention.GroundingChunk;
@@ -33,8 +28,13 @@ import com.nageoffer.ai.ragent.framework.web.StreamTaskManager;
 import com.nageoffer.ai.ragent.infra.chat.StreamCallback;
 import com.nageoffer.ai.ragent.infra.config.AIModelProperties;
 import com.nageoffer.ai.ragent.rag.core.memory.ConversationMemoryService;
-import lombok.extern.slf4j.Slf4j;
+import com.nageoffer.ai.ragent.rag.dao.entity.ConversationDO;
+import com.nageoffer.ai.ragent.rag.dto.CompletionPayload;
+import com.nageoffer.ai.ragent.rag.dto.MessageDelta;
+import com.nageoffer.ai.ragent.rag.dto.MetaPayload;
+import com.nageoffer.ai.ragent.rag.enums.SSEEventType;
 import com.nageoffer.ai.ragent.rag.service.ConversationGroupService;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.Optional;
@@ -55,6 +55,7 @@ public class StreamChatEventHandler implements StreamCallback {
     private final StreamTaskManager taskManager;
     private final boolean sendTitleOnComplete;
     private final StringBuilder answer = new StringBuilder();
+    private final Runnable onTraceCancel;
     private final StringBuilder thinking = new StringBuilder();
     private long thinkingStartMs;
     private int thinkingDurationSeconds;
@@ -74,6 +75,7 @@ public class StreamChatEventHandler implements StreamCallback {
         this.memoryService = params.getMemoryService();
         this.conversationGroupService = params.getConversationGroupService();
         this.taskManager = params.getTaskManager();
+        this.onTraceCancel = params.getOnTraceCancel();
         this.userId = UserContext.getUserId();
 
         // 计算配置
@@ -140,6 +142,8 @@ public class StreamChatEventHandler implements StreamCallback {
      * 取消收尾：持久化已累积内容后补发 cancel/done 事件并结束响应流
      */
     private void finishCancelledStream() {
+        try { if (onTraceCancel != null) onTraceCancel.run(); }
+        catch (Exception failure) { log.warn("Trace cancellation failed, taskId={}", taskId, failure); }
         CompletionPayload payload = buildCompletionPayloadOnCancel();
         CompletionPayload actualPayload = payload == null ? new CompletionPayload(null, null) : payload;
         sender.sendEvent(SSEEventType.CANCEL.value(), actualPayload);

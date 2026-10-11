@@ -29,7 +29,7 @@ spring:
   data:
     redis:
       host: 127.0.0.1
-      port: 6379
+      port: 6381
       password: 123456
 
 ragent:
@@ -209,7 +209,7 @@ ai:
         embedding: /v1/embeddings
     bailian:
       url: https://dashscope.aliyuncs.com
-      api-key: ${BAILIAN_API_KEY:}
+      api-key: sk-ws-H.PEEPXYM.Crlr.MEQCIEXErXJOq0PIjDPCd1ab2DvAH9N3l6QXBz_LrmHVzwZdAiBYBnRlcZBRa32zIdK9oPUGFE5NLmUPFoS9CBpqle6nUw
       endpoints:
         chat: /compatible-mode/v1/chat/completions
         rerank: /api/v1/services/rerank/text-rerank/text-rerank
@@ -222,7 +222,7 @@ ai:
         embedding: /v1/embeddings
     deepseek:
       url: https://api.deepseek.com
-      api-key: ${DEEPSEEK_API_KEY:}
+      api-key: sk-0dd06f2403eb4d9aaa00eb2d67cb2780
       endpoints:
         chat: /v1/chat/completions
 
@@ -311,7 +311,7 @@ ai:
 # MinerU SaaS API 配置（PDF / Word / PPT 走 MinerU 解析）
 mineru:
   api-url: https://mineru.net/api/v4
-  api-key: ${MINERU_API_KEY:}
+  api-key: sk-2e927mzWHnw4r6YM1aCL5ff8ZjHVxkJMrFmbPsSMhfaW1TTt
   poll-interval-seconds: 5
   timeout-seconds: 300
   enable-table: true

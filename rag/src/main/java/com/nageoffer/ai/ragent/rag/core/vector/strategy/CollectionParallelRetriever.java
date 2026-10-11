@@ -18,6 +18,7 @@
 package com.nageoffer.ai.ragent.rag.core.vector.strategy;
 
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.core.retrieval.RetrieveRequest;
 import com.nageoffer.ai.ragent.rag.core.vector.VectorRetrieverService;
 import lombok.extern.slf4j.Slf4j;
@@ -83,6 +84,7 @@ public class CollectionParallelRetriever {
                 allChunks.addAll(future.future().join());
                 successCount++;
             } catch (Exception e) {
+                RagTraceContext.event("DEGRADED", "COLLECTION_RETRIEVAL_ERROR: " + future.collection());
                 failureCount++;
                 log.error("全局检索 获取检索结果失败 - Collection: {}", future.collection(), e);
             }
@@ -112,6 +114,7 @@ public class CollectionParallelRetriever {
                             .build()
             );
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "COLLECTION_RETRIEVAL_ERROR: " + collectionName);
             log.error("在 collection {} 中检索失败，错误: {}", collectionName, e.getMessage(), e);
             return List.of();
         }

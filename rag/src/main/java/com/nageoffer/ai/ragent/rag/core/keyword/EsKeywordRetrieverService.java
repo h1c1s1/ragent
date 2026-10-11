@@ -18,13 +18,14 @@
 package com.nageoffer.ai.ragent.rag.core.keyword;
 
 import cn.hutool.core.collection.CollUtil;
-import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.KeywordProperties;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -86,6 +87,7 @@ public class EsKeywordRetrieverService implements KeywordRetrieverService {
                     .map(this::toChunk)
                     .toList();
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "ESKEYWORDRETRIEVERSERVICE_ERROR: " + e.getClass().getSimpleName());
             log.error("ES 关键词检索失败, index={}, collections={}, query={}", index, collectionNames, query, e);
             return List.of();
         }

@@ -29,9 +29,16 @@ public interface RagTraceRecordService {
 
     void startRun(RagTraceRunDO run);
 
+    default void cancelRunsByTask(String taskId) { }
+
     void finishRun(String traceId, String status, String errorMessage, Date endTime, long durationMs);
 
     void startNode(RagTraceNodeDO node);
 
     void finishNode(String traceId, String nodeId, String status, String errorMessage, Date endTime, long durationMs);
+
+    default void finishNode(String traceId, String nodeId, String status, String errorMessage,
+                            Date endTime, long durationMs, String extraData) {
+        finishNode(traceId, nodeId, status, errorMessage, endTime, durationMs);
+    }
 }

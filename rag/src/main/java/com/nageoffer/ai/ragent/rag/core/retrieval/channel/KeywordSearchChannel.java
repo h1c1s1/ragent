@@ -19,8 +19,10 @@ package com.nageoffer.ai.ragent.rag.core.retrieval.channel;
 
 import cn.hutool.core.collection.CollUtil;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.keyword.KeywordRetrieverService;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -72,12 +74,16 @@ public class KeywordSearchChannel implements SearchChannel {
             RetrievalScope scope = context.getRetrievalScope();
             List<String> collections = scope.targetCollections();
             if (CollUtil.isEmpty(collections)) {
+                RagTraceContext.event("SKIPPED", "NO_ACTIVE_COLLECTIONS");
                 log.info("关键词检索未解析到目标知识库，跳过");
                 return emptyResult(System.currentTimeMillis() - startTime);
             }
 
             String question = context.getMainQuestion();
             ScopeQuota quota = ScopeQuota.split(scope, context.getBudget().recallBudget(), supplementRatio());
+            RagTraceContext.record("branches", RagTraceData.map(
+                    "primary", RagTraceData.branch(collections, quota.primary(), null),
+                    "supplement", RagTraceData.branch(scope.supplementCollections(), quota.supplement(), null)));
             // 补充路失败必须只损失自己：它拿到的是兜底名额，而 join() 抛出会让已经取回的命中库证据
             // 一起被通道级 catch 丢掉。当前 ES 实现恰好自己吞了异常，但那是实现的偶然、不是通道的保证
             CompletableFuture<List<RetrievedChunk>> supplementTask = quota.supplement() > 0
@@ -85,6 +91,7 @@ public class KeywordSearchChannel implements SearchChannel {
                     () -> keywordRetriever.search(question, scope.supplementCollections(), quota.supplement()),
                     innerRetrievalExecutor)
                     .exceptionally(e -> {
+                        RagTraceContext.event("DEGRADED", "SUPPLEMENT_RETRIEVAL_ERROR");
                         log.warn("关键词补充路检索失败，仅丢弃补充证据: {}", e.getMessage());
                         return List.of();
                     })
@@ -92,6 +99,9 @@ public class KeywordSearchChannel implements SearchChannel {
 
             List<RetrievedChunk> primary = keywordRetriever.search(question, collections, quota.primary());
             List<RetrievedChunk> supplement = supplementTask.join();
+            RagTraceContext.record("branches", RagTraceData.map(
+                    "primary", RagTraceData.branch(collections, quota.primary(), primary),
+                    "supplement", RagTraceData.branch(scope.supplementCollections(), quota.supplement(), supplement)));
 
             long latency = System.currentTimeMillis() - startTime;
             log.info("关键词检索完成，命中 {} 库 {} 条，补充 {} 库 {} 条，耗时 {}ms",
@@ -104,6 +114,7 @@ public class KeywordSearchChannel implements SearchChannel {
                     .latencyMs(latency)
                     .build();
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "KEYWORDSEARCHCHANNEL_ERROR: " + e.getClass().getSimpleName());
             log.error("关键词检索失败", e);
             return emptyResult(System.currentTimeMillis() - startTime);
         }

@@ -20,6 +20,7 @@ package com.nageoffer.ai.ragent.rag.core.retrieval;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.framework.trace.RagTraceNode;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.intent.NodeScore;
@@ -29,8 +30,11 @@ import com.nageoffer.ai.ragent.rag.core.prompt.PromptTemplateLoader;
 import com.nageoffer.ai.ragent.rag.dto.KbResult;
 import com.nageoffer.ai.ragent.rag.dto.RetrievalContext;
 import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceRecorder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -41,6 +45,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.stream.IntStream;
 
 import static com.nageoffer.ai.ragent.rag.constant.RAGConstant.CONTEXT_FORMAT_PATH;
 import static com.nageoffer.ai.ragent.rag.constant.RAGConstant.MULTI_CHANNEL_KEY;
@@ -54,6 +59,9 @@ import static com.nageoffer.ai.ragent.rag.constant.RAGConstant.MULTI_CHANNEL_KEY
 @RequiredArgsConstructor
 public class RetrievalEngine {
 
+    @Autowired
+    private RagTraceRecorder traceRecorder = RagTraceRecorder.disabled();
+
     private final SearchChannelProperties searchProperties;
     private final ContextFormatter contextFormatter;
     private final PromptTemplateLoader templateLoader;
@@ -62,7 +70,9 @@ public class RetrievalEngine {
 
     @RagTraceNode(name = "retrieval-engine", type = "RETRIEVE")
     public RetrievalContext retrieve(List<SubQuestionIntent> subIntents) {
+        RagTraceContext.record("input", RagTraceData.map("subQuestions", RagTraceData.subIntents(subIntents)));
         if (CollUtil.isEmpty(subIntents)) {
+            RagTraceContext.event("SKIPPED", "NO_SUBQUESTIONS");
             return RetrievalContext.builder()
                     .intentChunks(Map.of())
                     .build();
@@ -75,17 +85,29 @@ public class RetrievalEngine {
                 searchProperties.getFusion().getRerankCandidateLimit(),
                 contextTopK
         );
-        List<CompletableFuture<SubQuestionContext>> tasks = subIntents.stream()
-                .map(intent -> CompletableFuture.supplyAsync(
+        List<CompletableFuture<SubQuestionContext>> tasks = IntStream.range(0, subIntents.size())
+                .mapToObj(index -> CompletableFuture.supplyAsync(
                         () -> {
-                            try {
-                                return buildSubQuestionContext(intent, budget);
-                            } catch (Exception e) {
-                                log.error("子问题上下文构建失败，降级为空上下文，question：{}", intent.subQuestion(), e);
-                                return new SubQuestionContext(
-                                        intent.subQuestion(), "", Map.of(),
-                                        KnowledgeRetrievalResult.empty().eligibleIntentIds(
-                                                NodeScoreFilters.kb(intent.nodeScores())));
+                            SubQuestionIntent intent = subIntents.get(index);
+                            try (var questionScope = RagTraceContext.withSubQuestion("sq-" + (index + 1));
+                                 var span = traceRecorder.start("retrieval-subquestion", "RETRIEVE");
+                                 var scope = span.activate()) {
+                                RagTraceContext.record("input", RagTraceData.map("question", intent.subQuestion(),
+                                        "intents", RagTraceData.intents(intent.nodeScores()), "contextTopK", budget.contextTopK()));
+                                try {
+                                    SubQuestionContext result = buildSubQuestionContext(intent, budget);
+                                    RagTraceContext.record("output", RagTraceData.map("context", result.kbContext(),
+                                            "eligibleIntentIds", result.eligibleIntentIds()));
+                                    return result;
+                                } catch (Exception e) {
+                                    RagTraceContext.event("DEGRADED", "SUBQUESTION_RETRIEVAL_ERROR");
+                                    span.error(e);
+                                    log.error("子问题上下文构建失败，降级为空上下文，question：{}", intent.subQuestion(), e);
+                                    return new SubQuestionContext(
+                                            intent.subQuestion(), "", Map.of(),
+                                            KnowledgeRetrievalResult.empty().eligibleIntentIds(
+                                                    NodeScoreFilters.kb(intent.nodeScores())));
+                                }
                             }
                         },
                         ragContextExecutor
@@ -124,6 +146,8 @@ public class RetrievalEngine {
             kbContext = kbBuilder.toString().trim();
         }
 
+        RagTraceContext.record("output", RagTraceData.map("context", kbContext,
+                "eligibleIntentIds", eligibleIntentIds, "intentGroups", mergedIntentChunks.keySet()));
         return RetrievalContext.builder()
                 .kbContext(kbContext)
                 .intentChunks(mergedIntentChunks)

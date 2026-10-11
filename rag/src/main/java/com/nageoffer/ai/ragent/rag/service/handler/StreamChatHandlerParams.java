@@ -33,6 +33,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @Builder
 public class StreamChatHandlerParams {
 
+    private final Runnable onTraceCancel;
+
     /**
      * SSE 发射器
      */

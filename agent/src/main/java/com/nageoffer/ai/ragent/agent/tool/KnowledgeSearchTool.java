@@ -19,7 +19,9 @@ package com.nageoffer.ai.ragent.agent.tool;
 
 import cn.hutool.core.util.StrUtil;
 import com.nageoffer.ai.ragent.agent.trace.AgentToolBodyTracer;
+import com.nageoffer.ai.ragent.agent.trace.AgentTraceContextKeys;
 import com.nageoffer.ai.ragent.framework.cancellation.TaskCancellation;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceLink;
 import com.nageoffer.ai.ragent.rag.service.KnowledgeSearchFacade;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultBlock;
@@ -27,11 +29,13 @@ import io.agentscope.core.message.ToolResultState;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
+import io.opentelemetry.api.trace.Span;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -83,8 +87,30 @@ public class KnowledgeSearchTool implements AgentTool {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        return AgentToolBodyTracer.trace(this, param, () -> Mono.fromCallable(() -> execute(param))
-                .subscribeOn(Schedulers.boundedElastic()));
+        return AgentToolBodyTracer.trace(this, param, () -> Mono.deferContextual(context -> {
+            Span parent = context.getOrDefault(AgentToolBodyTracer.KNOWLEDGE_PARENT_SPAN, null);
+            Map<String, Object> association = new LinkedHashMap<>();
+            if (param != null) {
+                association.put("toolCallId", param.getToolUseBlock() == null ? null : param.getToolUseBlock().getId());
+                var runtime = param.getRuntimeContext();
+                if (runtime != null) {
+                    association.put("conversationId", runtime.getSessionId());
+                    association.put("userId", runtime.getUserId());
+                    association.put("taskId", runtime.get(AgentTraceContextKeys.TASK_ID));
+                    var facts = AgentToolExecutionFacts.from(runtime);
+                    if (facts != null) association.put("agentRunId", facts.runId());
+                }
+            }
+            if (parent != null && parent.getSpanContext().isValid()) {
+                association.put("agentTraceId", parent.getSpanContext().getTraceId());
+                association.put("agentSpanId", parent.getSpanContext().getSpanId());
+            }
+            RagTraceLink link = new RagTraceLink(association,
+                    id -> { if (parent != null) parent.setAttribute("ragent.rag.trace_id", id); });
+            return Mono.fromCallable(() -> {
+                try (var scope = link.activate()) { return execute(param); }
+            }).subscribeOn(Schedulers.boundedElastic()).doOnCancel(link::cancel);
+        }));
     }
 
     private ToolResultBlock execute(ToolCallParam param) {

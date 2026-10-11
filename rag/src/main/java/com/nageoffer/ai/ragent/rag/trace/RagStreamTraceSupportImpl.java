@@ -63,16 +63,21 @@ public class RagStreamTraceSupportImpl implements RagStreamTraceSupport {
         int depth = RagTraceContext.depth();
         long startMillis = System.currentTimeMillis();
 
-        traceRecordService.startNode(RagTraceNodeDO.builder()
-                .traceId(traceId)
-                .nodeId(nodeId)
-                .parentNodeId(parentNodeId)
-                .depth(depth)
-                .nodeType(StrUtil.blankToDefault(type, "STREAM"))
-                .nodeName(name)
-                .status(STATUS_RUNNING)
-                .startTime(new Date())
-                .build());
+        try {
+            traceRecordService.startNode(RagTraceNodeDO.builder()
+                    .traceId(traceId)
+                    .nodeId(nodeId)
+                    .parentNodeId(parentNodeId)
+                    .depth(depth)
+                    .nodeType(StrUtil.blankToDefault(type, "STREAM"))
+                    .nodeName(name)
+                    .status(STATUS_RUNNING)
+                    .startTime(new Date())
+                    .build());
+        } catch (Exception failure) {
+            log.warn("stream trace startNode 失败，traceId：{}，name：{}", traceId, name, failure);
+            return NOOP_SPAN;
+        }
 
         // 调用线程上 push，使后续同步子节点（如 first-packet）能识别父节点
         RagTraceContext.pushNode(nodeId);
@@ -150,7 +155,7 @@ public class RagStreamTraceSupportImpl implements RagStreamTraceSupport {
         }
         String message = throwable.getClass().getSimpleName() + ": "
                 + StrUtil.blankToDefault(throwable.getMessage(), "");
-        int max = traceProperties.getMaxErrorLength();
+        int max = Math.max(0, traceProperties.getMaxErrorLength());
         return message.length() <= max ? message : message.substring(0, max);
     }
 }

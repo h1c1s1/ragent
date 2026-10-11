@@ -22,6 +22,7 @@ import cn.hutool.core.util.StrUtil;
 import com.nageoffer.ai.ragent.framework.convention.ChatMessage;
 import com.nageoffer.ai.ragent.framework.convention.ChatRequest;
 import com.nageoffer.ai.ragent.framework.convention.SourceRef;
+import com.nageoffer.ai.ragent.framework.web.StreamTaskManager;
 import com.nageoffer.ai.ragent.infra.chat.LLMService;
 import com.nageoffer.ai.ragent.infra.chat.StreamCallback;
 import com.nageoffer.ai.ragent.infra.chat.StreamCancellationHandle;
@@ -42,9 +43,10 @@ import com.nageoffer.ai.ragent.rag.core.source.GroundingChunksAssembler;
 import com.nageoffer.ai.ragent.rag.core.source.SourcesAssembler;
 import com.nageoffer.ai.ragent.rag.dto.RetrievalContext;
 import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
-import com.nageoffer.ai.ragent.framework.web.StreamTaskManager;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceRecorder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -62,6 +64,8 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class StreamChatPipeline {
+    @Autowired
+    private RagTraceRecorder traceRecorder = RagTraceRecorder.disabled();
 
     private final ConversationMemoryService memoryService;
     private final QueryRewriteService queryRewriteService;
@@ -176,6 +180,7 @@ public class StreamChatPipeline {
         ctx.getCallback().onSources(sources);
         // 开关关闭时这一步只负责清掉上下文里的内部 docId，不注入编号
         retrievalCtx.setKbContext(citationContextEnricher.enrich(retrievalCtx.getKbContext(), sources));
+        traceRecorder.context(retrievalCtx.getKbContext(), retrievalCtx.getEligibleIntentIds(), "RAG_LLM");
 
         // 装配 grounding 片段随消息落库 供答案后推荐追问生成 grounding（不参与 prompt）
         ctx.getCallback().onGroundingChunks(groundingChunksAssembler.assemble(retrievalCtx.getIntentChunks()));

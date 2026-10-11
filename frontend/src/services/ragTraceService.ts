@@ -1,6 +1,7 @@
 import { api } from "@/services/api";
 
 export interface RagTraceRun {
+  extraData?: string | null;
   traceId: string;
   traceName?: string | null;
   entryMethod?: string | null;

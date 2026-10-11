@@ -18,11 +18,13 @@
 package com.nageoffer.ai.ragent.rag.core.retrieval.postprocessor;
 
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.infra.rerank.RerankService;
 import com.nageoffer.ai.ragent.rag.config.RAGConfigProperties;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchChannelResult;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchChannelType;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchContext;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -75,6 +77,10 @@ public class RerankPostProcessor implements SearchResultPostProcessor {
                 context.getBudget().contextTopK()
         );
 
+        boolean scored = reranked.stream().anyMatch(c -> c.getRerankScore() != null);
+        RagTraceContext.record("decision", RagTraceData.map("contextTopK", context.getBudget().contextTopK(),
+                "result", scored ? "SCORED" : "NO_RERANK_SCORES"));
+        if (!scored && !reranked.isEmpty()) RagTraceContext.event("DEGRADED", "NO_RERANK_SCORES");
         logScoreSpread(reranked);
         logAttribution(chunks, reranked, results);
         return reranked;

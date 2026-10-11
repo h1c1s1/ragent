@@ -31,8 +31,11 @@ import com.nageoffer.ai.ragent.rag.core.rewrite.RewriteResult;
 import com.nageoffer.ai.ragent.rag.core.source.CitationContextEnricher;
 import com.nageoffer.ai.ragent.rag.dto.RetrievalContext;
 import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
+import com.nageoffer.ai.ragent.rag.trace.KnowledgeSearchTraceRunner;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceRecorder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -47,6 +50,10 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class KnowledgeSearchFacade {
+    @Autowired
+    private KnowledgeSearchTraceRunner traceRunner = KnowledgeSearchTraceRunner.disabled();
+    @Autowired
+    private RagTraceRecorder traceRecorder = RagTraceRecorder.disabled();
 
     private static final String EMPTY_RESULT = "未在知识库中检索到与该问题相关的内容。";
 
@@ -62,6 +69,10 @@ public class KnowledgeSearchFacade {
      * 检索并合成答案，供主 Agent 的 search_knowledge 工具调用
      */
     public String search(String query) {
+        return traceRunner.run(query, () -> searchWithinTrace(query));
+    }
+
+    private String searchWithinTrace(String query) {
         // 不喂历史：主 Agent 手握完整对话，传进来的已是消解过、且被它有意收窄的查询
         RewriteResult rewriteResult = queryRewriteService.rewriteWithSplit(query, List.of());
         List<SubQuestionIntent> subIntents = intentResolver.resolve(rewriteResult);
@@ -81,6 +92,7 @@ public class KnowledgeSearchFacade {
 
         // 工具不渲染角标，但内部 docId 一定要抹掉，否则会随工具结果漏进主 Agent 的可见文本
         String kbContext = citationContextEnricher.stripDocIdAnchors(retrievalCtx.getKbContext());
+        traceRecorder.context(kbContext, retrievalCtx.getEligibleIntentIds(), "AGENT_KNOWLEDGE_LLM");
 
         PromptContext promptContext = PromptContext.builder()
                 .kbContext(kbContext)

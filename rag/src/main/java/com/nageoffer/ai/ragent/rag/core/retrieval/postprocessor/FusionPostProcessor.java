@@ -19,10 +19,12 @@ package com.nageoffer.ai.ragent.rag.core.retrieval.postprocessor;
 
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunkKey;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchChannelResult;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchChannelType;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchContext;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -125,6 +127,10 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
      * limit <= 0 表示不截断（全量透传）
      */
     private List<RetrievedChunk> truncateForRerank(List<RetrievedChunk> ranked, List<SearchChannelResult> results, int limit) {
+        RagTraceContext.record("decision", RagTraceData.map("strategy", results != null && results.size() > 1 ? "RRF" : "SINGLE_CHANNEL",
+                "rrfK", properties.getFusion().getRrfK(), "candidateLimit", limit,
+                "weights", RagTraceData.map("vector", weightOf(SearchChannelType.VECTOR), "keyword", weightOf(SearchChannelType.KEYWORD),
+                        "graph", weightOf(SearchChannelType.GRAPH), "web", weightOf(SearchChannelType.WEB_SEARCH))));
         boolean truncate = limit > 0 && ranked.size() > limit;
         List<RetrievedChunk> candidates = truncate
                 ? new ArrayList<>(ranked.subList(0, limit))

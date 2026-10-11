@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { getRagTraceDetail, type RagTraceDetail } from "@/services/ragTraceService";
 import { getErrorMessage } from "@/utils/error";
+import { TraceBusinessDetails } from "@/pages/admin/traces/components/TraceBusinessDetails";
 import { TraceStatusChip } from "@/pages/admin/traces/components/TraceStatusChip";
 import {
   clamp,
@@ -299,14 +300,7 @@ function NodeDetailCard({
                 </div>
               </div>
           )}
-          {node.extraData && (
-              <div>
-                <p className="text-xs font-medium text-slate-500 mb-1">额外数据</p>
-                <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all text-slate-700">
-                  {tryPrettyJson(node.extraData)}
-                </pre>
-              </div>
-          )}
+          <TraceBusinessDetails raw={node.extraData} />
         </CardContent>
       </Card>
   );
@@ -350,14 +344,6 @@ function DetailField({
         )}
       </div>
   );
-}
-
-function tryPrettyJson(raw: string): string {
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2);
-  } catch {
-    return raw;
-  }
 }
 
 // ============ 主组件 ============
@@ -445,7 +431,7 @@ export function RagTraceDetailPage() {
           durationMs: selectedRun.durationMs ?? null,
           startTime: selectedRun.startTime ?? null,
           endTime: selectedRun.endTime ?? null,
-          extraData: null,
+          extraData: selectedRun.extraData ?? null,
           depthValue: 0,
           resolvedDurationMs: Math.max(resolvedRunEnd - baseStart, 1),
           startTs: baseStart,

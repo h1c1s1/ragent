@@ -54,4 +54,6 @@ public class RagTraceNodeVO {
     private Date startTime;
 
     private Date endTime;
+
+    private String extraData;
 }

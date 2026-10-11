@@ -18,21 +18,26 @@
 package com.nageoffer.ai.ragent.rag.core.intent;
 
 import cn.hutool.core.collection.CollUtil;
-import com.nageoffer.ai.ragent.rag.dto.IntentCandidate;
-import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.framework.trace.RagTraceNode;
 import com.nageoffer.ai.ragent.rag.core.rewrite.RewriteResult;
+import com.nageoffer.ai.ragent.rag.dto.IntentCandidate;
+import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceRecorder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.HashMap;
 import java.util.concurrent.Executor;
+import java.util.stream.IntStream;
 
 import static com.nageoffer.ai.ragent.rag.constant.RAGConstant.INTENT_MIN_SCORE;
 import static com.nageoffer.ai.ragent.rag.constant.RAGConstant.MAX_INTENT_COUNT;
@@ -43,6 +48,9 @@ import static com.nageoffer.ai.ragent.rag.enums.IntentKind.SYSTEM;
 @RequiredArgsConstructor
 public class IntentResolver {
 
+    @Autowired
+    private RagTraceRecorder traceRecorder = RagTraceRecorder.disabled();
+
     @Qualifier("defaultIntentClassifier")
     private final IntentClassifier intentClassifier;
     private final Executor intentClassifyExecutor;
@@ -52,14 +60,22 @@ public class IntentResolver {
         List<String> subQuestions = CollUtil.isNotEmpty(rewriteResult.subQuestions())
                 ? rewriteResult.subQuestions()
                 : List.of(rewriteResult.rewrittenQuestion());
-        List<CompletableFuture<SubQuestionIntent>> tasks = subQuestions.stream()
-                .map(q -> CompletableFuture.supplyAsync(
+        RagTraceContext.record("input", RagTraceData.map("rewrittenQuestion", rewriteResult.rewrittenQuestion(),
+                "subQuestions", subQuestions, "minScore", INTENT_MIN_SCORE, "maxIntentCount", MAX_INTENT_COUNT));
+        List<CompletableFuture<SubQuestionIntent>> tasks = IntStream.range(0, subQuestions.size())
+                .mapToObj(index -> CompletableFuture.supplyAsync(
                         () -> {
-                            try {
-                                return new SubQuestionIntent(q, classifyIntents(q));
-                            } catch (Exception e) {
-                                log.error("子问题意图分类失败，降级为空意图，question：{}", q, e);
-                                return new SubQuestionIntent(q, List.of());
+                            String q = subQuestions.get(index);
+                            try (var questionScope = RagTraceContext.withSubQuestion("sq-" + (index + 1));
+                                 var span = traceRecorder.start("intent-classify", "INTENT_CLASSIFY");
+                                 var scope = span.activate()) {
+                                try {
+                                    return new SubQuestionIntent(q, classifyIntents(q));
+                                } catch (Exception e) {
+                                    RagTraceContext.event("DEGRADED", "CLASSIFICATION_ERROR: " + e.getClass().getSimpleName());
+                                    log.error("子问题意图分类失败，降级为空意图，question：{}", q, e);
+                                    return new SubQuestionIntent(q, List.of());
+                                }
                             }
                         },
                         intentClassifyExecutor
@@ -68,7 +84,19 @@ public class IntentResolver {
         List<SubQuestionIntent> subIntents = tasks.stream()
                 .map(CompletableFuture::join)
                 .toList();
-        return capTotalIntents(subIntents);
+        List<SubQuestionIntent> selected = capTotalIntents(subIntents);
+        RagTraceContext.record("inputAfterThreshold", RagTraceData.subIntents(subIntents));
+        RagTraceContext.record("output", RagTraceData.map("subQuestions", RagTraceData.subIntents(selected)));
+        List<Map<String, Object>> dropped = new ArrayList<>();
+        for (int i = 0; i < subIntents.size(); i++) {
+            for (NodeScore score : subIntents.get(i).nodeScores()) {
+                if (!selected.get(i).nodeScores().contains(score)) dropped.add(RagTraceData.map(
+                        "subQuestionId", "sq-" + (i + 1), "intentId", score.getNode().getId(),
+                        "score", score.getScore(), "reason", "TOTAL_INTENT_LIMIT"));
+            }
+        }
+        RagTraceContext.record("decision", RagTraceData.map("dropped", dropped));
+        return selected;
     }
 
     public List<NodeScore> mergeKbIntents(List<SubQuestionIntent> subIntents) {
@@ -86,11 +114,21 @@ public class IntentResolver {
     }
 
     private List<NodeScore> classifyIntents(String question) {
+        RagTraceContext.record("input", RagTraceData.map("question", question, "minScore", INTENT_MIN_SCORE,
+                "maxIntentCount", MAX_INTENT_COUNT));
         List<NodeScore> scores = intentClassifier.classifyTargets(question);
-        return scores.stream()
+        List<NodeScore> selected = scores.stream()
                 .filter(ns -> ns.getScore() >= INTENT_MIN_SCORE)
                 .limit(MAX_INTENT_COUNT)
                 .toList();
+        RagTraceContext.record("output", RagTraceData.map("candidates", RagTraceData.intents(scores),
+                "selected", RagTraceData.intents(selected), "totalCount", scores.size(), "selectedCount", selected.size()));
+        List<Map<String, Object>> dropped = new ArrayList<>();
+        for (NodeScore score : scores) if (!selected.contains(score)) dropped.add(RagTraceData.map(
+                "intentId", score.getNode().getId(), "score", score.getScore(), "reason",
+                score.getScore() < INTENT_MIN_SCORE ? "BELOW_SCORE_THRESHOLD" : "PER_QUESTION_LIMIT"));
+        RagTraceContext.record("decision", RagTraceData.map("dropped", dropped));
+        return selected;
     }
 
     /**

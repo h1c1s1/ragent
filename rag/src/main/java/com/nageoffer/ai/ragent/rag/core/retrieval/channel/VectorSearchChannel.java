@@ -18,11 +18,13 @@
 package com.nageoffer.ai.ragent.rag.core.retrieval.channel;
 
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.retrieval.RetrievalBudget;
 import com.nageoffer.ai.ragent.rag.core.retrieval.RetrieveRequest;
 import com.nageoffer.ai.ragent.rag.core.vector.VectorRetrieverService;
 import com.nageoffer.ai.ragent.rag.core.vector.strategy.CollectionParallelRetriever;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -96,6 +98,7 @@ public class VectorSearchChannel implements SearchChannel {
                     .build();
 
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "VECTORSEARCHCHANNEL_ERROR: " + e.getClass().getSimpleName());
             log.error("向量检索失败", e);
             return emptyResult(System.currentTimeMillis() - startTime);
         }
@@ -114,6 +117,9 @@ public class VectorSearchChannel implements SearchChannel {
         String question = context.getMainQuestion();
         float[] queryVector = retrieverService.embedAndNormalize(question);
         ScopeQuota quota = ScopeQuota.split(scope, resolveDirectedBudget(scope, context.getBudget()), supplementRatio());
+        RagTraceContext.record("branches", RagTraceData.map(
+                "primary", RagTraceData.branch(scope.targetCollections(), quota.primary(), null),
+                "supplement", RagTraceData.branch(scope.supplementCollections(), quota.supplement(), null)));
 
         // 补充路失败必须只损失自己：它拿到的是兜底名额，而 join() 抛出会让已经取回的定向证据一起被
         // 通道级 catch 丢掉——兜底路把主路带走，鲁棒性方向正好反了
@@ -122,6 +128,7 @@ public class VectorSearchChannel implements SearchChannel {
                 () -> retrieveOver(question, queryVector, scope.supplementCollections(), quota.supplement()),
                 retrievalExecutor)
                 .exceptionally(e -> {
+                    RagTraceContext.event("DEGRADED", "SUPPLEMENT_RETRIEVAL_ERROR");
                     log.warn("向量补充路检索失败，仅丢弃补充证据: {}", e.getMessage());
                     return List.of();
                 })
@@ -129,6 +136,9 @@ public class VectorSearchChannel implements SearchChannel {
 
         List<RetrievedChunk> directed = retrieveOver(question, queryVector, scope.targetCollections(), quota.primary());
         List<RetrievedChunk> supplement = supplementTask.join();
+        RagTraceContext.record("branches", RagTraceData.map(
+                "primary", RagTraceData.branch(scope.targetCollections(), quota.primary(), directed),
+                "supplement", RagTraceData.branch(scope.supplementCollections(), quota.supplement(), supplement)));
 
         log.info("向量检索完成（定向），意图 top1={}，命中 {} 库 {} 条（最高余弦 {}），补充 {} 库 {} 条（最高余弦 {}）",
                 scope.topScore(), scope.targetCollections().size(), directed.size(), ChunkRanking.topScoreOf(directed),
@@ -160,12 +170,17 @@ public class VectorSearchChannel implements SearchChannel {
      */
     private List<RetrievedChunk> retrieveGlobal(SearchContext context, RetrievalScope scope) {
         if (scope.targetCollections().isEmpty()) {
+            RagTraceContext.event("SKIPPED", "NO_ACTIVE_COLLECTIONS");
             log.warn("未找到任何 KB collection，跳过全局检索");
             return List.of();
         }
         String question = context.getMainQuestion();
+        RagTraceContext.record("branches", RagTraceData.map("primary",
+                RagTraceData.branch(scope.targetCollections(), context.getBudget().recallBudget(), null)));
         List<RetrievedChunk> chunks = retrieveOver(question, retrieverService.embedAndNormalize(question),
                 scope.targetCollections(), context.getBudget().recallBudget());
+        RagTraceContext.record("branches", RagTraceData.map("primary",
+                RagTraceData.branch(scope.targetCollections(), context.getBudget().recallBudget(), chunks)));
 
         log.info("向量检索完成（全局），意图 top1={}，{} 库 {} 条（最高余弦 {}）",
                 scope.topScore(), scope.targetCollections().size(), chunks.size(), ChunkRanking.topScoreOf(chunks));

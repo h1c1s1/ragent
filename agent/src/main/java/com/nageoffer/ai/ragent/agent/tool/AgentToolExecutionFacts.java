@@ -81,6 +81,8 @@ public final class AgentToolExecutionFacts {
     /**
      * 从框架上下文取本次 run 的事实源，取不到返回 null，调用方按「无追踪」放行
      */
+    public String runId() { return runId; }
+
     public static AgentToolExecutionFacts from(RuntimeContext ctx) {
         Object facts = ctx == null ? null : ctx.get(RUNTIME_CONTEXT_KEY);
         return facts instanceof AgentToolExecutionFacts value ? value : null;

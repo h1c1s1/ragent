@@ -25,16 +25,18 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.nageoffer.ai.ragent.framework.convention.ChatMessage;
+import com.nageoffer.ai.ragent.framework.convention.ChatRequest;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
+import com.nageoffer.ai.ragent.infra.chat.LLMService;
 import com.nageoffer.ai.ragent.infra.util.LLMResponseCleaner;
 import com.nageoffer.ai.ragent.infra.util.LogSafe;
 import com.nageoffer.ai.ragent.rag.config.OrchestrationMode;
 import com.nageoffer.ai.ragent.rag.config.OrchestrationProperties;
+import com.nageoffer.ai.ragent.rag.core.prompt.PromptTemplateLoader;
 import com.nageoffer.ai.ragent.rag.dao.entity.IntentNodeDO;
 import com.nageoffer.ai.ragent.rag.dao.mapper.IntentNodeMapper;
-import com.nageoffer.ai.ragent.framework.convention.ChatMessage;
-import com.nageoffer.ai.ragent.framework.convention.ChatRequest;
-import com.nageoffer.ai.ragent.infra.chat.LLMService;
-import com.nageoffer.ai.ragent.rag.core.prompt.PromptTemplateLoader;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -152,6 +154,7 @@ public class DefaultIntentClassifier implements IntentClassifier, IntentNodeRegi
         // 每次都从Redis读取最新数据
         IntentTreeData data = loadIntentTreeData();
         if (data.leafNodes.isEmpty()) {
+            RagTraceContext.event("SKIPPED", "NO_INTENT_LEAVES");
             log.debug("意图树没有可用叶子节点，跳过 LLM 意图识别");
             return List.of();
         }
@@ -161,7 +164,10 @@ public class DefaultIntentClassifier implements IntentClassifier, IntentNodeRegi
                 .filter(node -> node.isKB()
                         || (orchestrationProperties.getMode() == OrchestrationMode.WORKFLOW && node.isSystem()))
                 .toList();
+        RagTraceContext.record("classification", RagTraceData.map("mode", String.valueOf(orchestrationProperties.getMode()),
+                "candidateCount", candidates.size(), "candidateIds", candidates.stream().map(IntentNode::getId).toList()));
         if (candidates.isEmpty()) {
+            RagTraceContext.event("SKIPPED", "NO_AVAILABLE_INTENTS");
             log.debug("当前编排模式没有可用意图叶子节点，跳过 LLM 意图识别, mode={}",
                     orchestrationProperties.getMode());
             return List.of();
@@ -185,9 +191,11 @@ public class DefaultIntentClassifier implements IntentClassifier, IntentNodeRegi
         try {
             raw = llmService.chat(request);
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "INTENT_MODEL_ERROR: " + e.getClass().getSimpleName());
             log.warn("意图识别 LLM 调用失败，返回空意图", e);
             return List.of();
         }
+        RagTraceContext.record("rawResponse", raw);
         return parseScores(raw, candidateById, question);
     }
 
@@ -206,20 +214,28 @@ public class DefaultIntentClassifier implements IntentClassifier, IntentNodeRegi
                 // 容错：如果模型外面又包了一层 { "results": [...] }
                 arr = root.getAsJsonObject().getAsJsonArray("results");
             } else {
+                RagTraceContext.event("DEGRADED", "INVALID_INTENT_JSON_SHAPE");
                 log.warn("LLM 返回了非预期的 JSON 格式, 原始响应: {}", LogSafe.preview(raw));
                 return List.of();
             }
 
             List<NodeScore> scores = new ArrayList<>();
             for (JsonElement el : arr) {
-                if (!el.isJsonObject()) continue;
+                if (!el.isJsonObject()) {
+                    RagTraceContext.event("FILTERED", "MALFORMED_INTENT_ENTRY");
+                    continue;
+                }
                 JsonObject obj = el.getAsJsonObject();
 
-                if (!obj.has("id") || !obj.has("score")) continue;
+                if (!obj.has("id") || !obj.has("score")) {
+                    RagTraceContext.event("FILTERED", "MISSING_INTENT_ID_OR_SCORE");
+                    continue;
+                }
 
                 String id = obj.get("id").getAsString();
                 IntentNode node = candidateById.get(id);
                 if (node == null) {
+                    RagTraceContext.event("FILTERED", "UNKNOWN_INTENT_ID: " + id);
                     log.warn("LLM 返回了未知或当前模式不可用的意图节点 ID: {}, 已跳过", id);
                     continue;
                 }
@@ -241,6 +257,7 @@ public class DefaultIntentClassifier implements IntentClassifier, IntentNodeRegi
             );
             return scores;
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "INTENT_PARSE_ERROR");
             log.warn("意图打分解析失败, 原始响应: {}", LogSafe.preview(raw), e);
             return List.of();
         }

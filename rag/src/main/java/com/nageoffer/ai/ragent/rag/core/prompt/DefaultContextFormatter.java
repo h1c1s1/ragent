@@ -21,7 +21,10 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunkKey;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceNode;
 import com.nageoffer.ai.ragent.rag.core.intent.NodeScore;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -45,12 +48,16 @@ public class DefaultContextFormatter implements ContextFormatter {
     private final PromptTemplateLoader templateLoader;
 
     @Override
+    @RagTraceNode(name = "context-format", type = "RETRIEVE_CONTEXT")
     public String formatKbContext(List<NodeScore> kbIntents,
                                   Set<String> eligibleIntentIds,
                                   List<RetrievedChunk> rerankedChunks,
                                   int contextTopK) {
+        RagTraceContext.record("input", RagTraceData.map("contextTopK", contextTopK, "eligibleIntentIds", eligibleIntentIds,
+                "chunks", RagTraceData.chunks(rerankedChunks == null ? List.of() : rerankedChunks, "POSTPROCESS_SCORE", null)));
         if (CollUtil.isEmpty(rerankedChunks)) {
-            return "";
+            RagTraceContext.record("decision", RagTraceData.map("result", "EMPTY", "reason", "NO_EVIDENCE"));
+            return traceContext("");
         }
 
         List<NodeScore> eligibleIntents = eligibleIntents(kbIntents, eligibleIntentIds);
@@ -62,13 +69,21 @@ public class DefaultContextFormatter implements ContextFormatter {
         log.info("检索归因 - 提示词分支: {}, 可用意图: {}",
                 branch,
                 eligibleIntents.stream().map(ns -> ns.getNode().getName()).toList());
+        RagTraceContext.record("decision", RagTraceData.map("result", eligibleIntents.isEmpty() ? "NO_INTENT_RULES"
+                : eligibleIntents.size() > 1 ? "MULTIPLE_INTENT_RULES" : "SINGLE_INTENT_RULES",
+                "intents", RagTraceData.intents(eligibleIntents)));
         if (eligibleIntents.isEmpty()) {
-            return formatChunksWithoutIntent(rerankedChunks, contextTopK);
+            return traceContext(formatChunksWithoutIntent(rerankedChunks, contextTopK));
         }
         if (eligibleIntents.size() > 1) {
-            return formatMultiIntentContext(eligibleIntents, rerankedChunks, contextTopK);
+            return traceContext(formatMultiIntentContext(eligibleIntents, rerankedChunks, contextTopK));
         }
-        return formatSingleIntentContext(eligibleIntents.get(0), rerankedChunks, contextTopK);
+        return traceContext(formatSingleIntentContext(eligibleIntents.get(0), rerankedChunks, contextTopK));
+    }
+
+    private String traceContext(String context) {
+        RagTraceContext.record("output", RagTraceData.map("context", context, "characterCount", context.length()));
+        return context;
     }
 
     private List<NodeScore> eligibleIntents(List<NodeScore> kbIntents,
@@ -175,6 +190,10 @@ public class DefaultContextFormatter implements ContextFormatter {
             groups.computeIfAbsent(key, k -> new ArrayList<>()).add(chunk);
         }
 
+        List<RetrievedChunk> renderedOrder = groups.values().stream()
+                .flatMap(group -> group.stream().sorted(Comparator.comparing(RetrievedChunk::getChunkIndex,
+                        Comparator.nullsLast(Comparator.naturalOrder())))).toList();
+        RagTraceContext.record("selectedEvidence", RagTraceData.chunks(renderedOrder, "POSTPROCESS_SCORE", null));
         return groups.values().stream()
                 .map(this::renderDocBlock)
                 .collect(Collectors.joining("\n"));

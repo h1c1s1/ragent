@@ -35,7 +35,7 @@ public @interface RagTraceNode {
     String name() default "";
 
     /**
-     * 节点类型（用于分组统计）
+     * 节点类型（用于分组统计），长度不得超过 t_rag_trace_node.node_type 的 16 字符限制
      */
     String type() default "METHOD";
 }

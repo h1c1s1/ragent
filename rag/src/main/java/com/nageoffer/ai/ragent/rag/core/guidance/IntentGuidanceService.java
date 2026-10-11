@@ -19,6 +19,7 @@ package com.nageoffer.ai.ragent.rag.core.guidance;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.framework.trace.RagTraceNode;
 import com.nageoffer.ai.ragent.rag.config.GuidanceProperties;
 import com.nageoffer.ai.ragent.rag.constant.RAGConstant;
@@ -28,6 +29,7 @@ import com.nageoffer.ai.ragent.rag.core.intent.NodeScore;
 import com.nageoffer.ai.ragent.rag.core.intent.NodeScoreFilters;
 import com.nageoffer.ai.ragent.rag.core.prompt.PromptTemplateLoader;
 import com.nageoffer.ai.ragent.rag.dto.SubQuestionIntent;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -66,16 +68,22 @@ public class IntentGuidanceService {
 
     @RagTraceNode(name = "guidance-detect", type = "GUIDANCE")
     public GuidanceDecision detectAmbiguity(String question, List<SubQuestionIntent> subIntents) {
+        RagTraceContext.record("input", RagTraceData.map("question", question, "subQuestions", RagTraceData.subIntents(subIntents)));
         if (!Boolean.TRUE.equals(guidanceProperties.getEnabled())) {
+            RagTraceContext.record("decision", RagTraceData.map("action", "NONE", "reason", "GUIDANCE_DISABLED"));
             return GuidanceDecision.none();
         }
 
         AmbiguityGroup group = findAmbiguityGroup(question, subIntents);
         if (group == null || CollUtil.isEmpty(group.ranked())) {
+            RagTraceContext.record("decision", RagTraceData.map("action", "NONE", "reason", "NO_CONFIRMED_AMBIGUITY"));
             return GuidanceDecision.none();
         }
 
         String prompt = buildPrompt(group.topicName(), group.ranked());
+        RagTraceContext.record("decision", RagTraceData.map("action", "PROMPT", "reason", "AMBIGUOUS_INTENT_PATHS",
+                "topic", group.topicName(), "intents", RagTraceData.intents(group.ranked())));
+        RagTraceContext.record("output", RagTraceData.map("prompt", prompt));
         return GuidanceDecision.prompt(prompt);
     }
 

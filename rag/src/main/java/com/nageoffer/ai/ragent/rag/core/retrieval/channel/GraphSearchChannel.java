@@ -19,10 +19,12 @@ package com.nageoffer.ai.ragent.rag.core.retrieval.channel;
 
 import cn.hutool.core.collection.CollUtil;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.GraphProperties;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.graph.GraphEvidence;
 import com.nageoffer.ai.ragent.rag.core.graph.LightRagClient;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -81,6 +83,7 @@ public class GraphSearchChannel implements SearchChannel {
             RetrievalScope scope = context.getRetrievalScope();
             List<String> collections = scope.targetCollections();
             if (CollUtil.isEmpty(collections)) {
+                RagTraceContext.event("SKIPPED", "NO_ACTIVE_COLLECTIONS");
                 log.info("图谱检索未解析到有效知识库，跳过");
                 return emptyResult(System.currentTimeMillis() - startTime);
             }
@@ -88,6 +91,8 @@ public class GraphSearchChannel implements SearchChannel {
             int baseTopK = context.getBudget().recallBudget();
             int topK = scope.directed() ? baseTopK * FILTER_TOPK_BOOST : baseTopK;
             String queryMode = graphProperties.getLightrag().getQueryMode();
+            RagTraceContext.record("graphQuery", RagTraceData.map("queryMode", queryMode,
+                    "requestedTopK", topK, "baseTopK", baseTopK, "filterMode", "RESULT_SIDE_COLLECTION_FILTER"));
 
             GraphEvidence evidence = lightRagClient.retrieveByScope(
                     context.getMainQuestion(), queryMode, topK, collections);
@@ -98,6 +103,12 @@ public class GraphSearchChannel implements SearchChannel {
             ScopeQuota quota = ScopeQuota.split(scope, baseTopK, properties.getScope().getSupplementRatio());
             List<RetrievedChunk> primary = ScopeQuota.cap(evidence.matched(), quota.primary());
             List<RetrievedChunk> supplement = ScopeQuota.cap(evidence.unmatched(), quota.supplement());
+            RagTraceContext.record("branches", RagTraceData.map(
+                    "primary", RagTraceData.branch(collections, quota.primary(), primary),
+                    "supplement", RagTraceData.branch(scope.supplementCollections(), quota.supplement(), supplement),
+                    "supplementSource", "UNMATCHED_GRAPH_EVIDENCE", "matchedCount", evidence.matched().size(),
+                    "unmatchedCount", evidence.unmatched().size(), "discardedCount",
+                    evidence.matched().size() + evidence.unmatched().size() - primary.size() - supplement.size()));
 
             long latency = System.currentTimeMillis() - startTime;
             log.info("图谱检索完成，范围={}，命中 {} 条，补充 {} 条，耗时 {}ms",
@@ -112,6 +123,7 @@ public class GraphSearchChannel implements SearchChannel {
                     .latencyMs(latency)
                     .build();
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "GRAPHSEARCHCHANNEL_ERROR: " + e.getClass().getSimpleName());
             log.error("图谱检索失败", e);
             return emptyResult(System.currentTimeMillis() - startTime);
         }

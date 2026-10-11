@@ -22,7 +22,9 @@ import com.nageoffer.ai.ragent.infra.chat.StreamCallback;
 import com.nageoffer.ai.ragent.infra.config.AIModelProperties;
 import com.nageoffer.ai.ragent.rag.core.memory.ConversationMemoryService;
 import com.nageoffer.ai.ragent.rag.service.ConversationGroupService;
+import com.nageoffer.ai.ragent.rag.service.RagTraceRecordService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -33,6 +35,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @Component
 @RequiredArgsConstructor
 public class StreamCallbackFactory {
+
+    @Autowired
+    private RagTraceRecordService traceRecords;
 
     private final AIModelProperties modelProperties;
     private final ConversationMemoryService memoryService;
@@ -58,6 +63,7 @@ public class StreamCallbackFactory {
                 .memoryService(memoryService)
                 .conversationGroupService(conversationGroupService)
                 .taskManager(taskManager)
+                .onTraceCancel(() -> { if (traceRecords != null) traceRecords.cancelRunsByTask(taskId); })
                 .build();
 
         return new StreamChatEventHandler(params);

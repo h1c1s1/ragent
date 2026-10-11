@@ -18,10 +18,12 @@
 package com.nageoffer.ai.ragent.rag.core.retrieval.postprocessor;
 
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.RAGConfigProperties;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchChannelResult;
 import com.nageoffer.ai.ragent.rag.core.retrieval.channel.SearchContext;
+import com.nageoffer.ai.ragent.rag.trace.RagTraceData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
@@ -76,6 +78,8 @@ public class EvidenceGatePostProcessor implements SearchResultPostProcessor, Ini
     public List<RetrievedChunk> process(List<RetrievedChunk> chunks,
                                         List<SearchChannelResult> results,
                                         SearchContext context) {
+        RagTraceContext.record("decision", RagTraceData.map("result", "NO_CANDIDATES",
+                "minRerankScore", searchChannelProperties.getEvidence().getMinRerankScore()));
         if (chunks.isEmpty()) {
             return chunks;
         }
@@ -85,11 +89,15 @@ public class EvidenceGatePostProcessor implements SearchResultPostProcessor, Ini
         // 走到这里说明闸门在空转，按 warn 打——精排正常时不该出现
         Float topScore = maxRerankScore(chunks);
         if (topScore == null) {
+            RagTraceContext.record("decision", RagTraceData.map("result", "PASS_WITHOUT_SCORE",
+                    "minRerankScore", searchChannelProperties.getEvidence().getMinRerankScore()));
             log.warn("检索归因 - 证据闸门: 本批 {} 条无精排分可读，闸门空转放行", chunks.size());
             return chunks;
         }
 
         double minRerankScore = searchChannelProperties.getEvidence().getMinRerankScore();
+        RagTraceContext.record("decision", RagTraceData.map("result", topScore >= minRerankScore ? "PASS" : "REJECT_BATCH",
+                "topRerankScore", topScore, "minRerankScore", minRerankScore));
         if (topScore >= minRerankScore) {
             return chunks;
         }

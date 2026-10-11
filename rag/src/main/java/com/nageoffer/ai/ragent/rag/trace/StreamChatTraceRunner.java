@@ -19,9 +19,10 @@ package com.nageoffer.ai.ragent.rag.trace;
 
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.json.JSONUtil;
+import com.nageoffer.ai.ragent.framework.cancellation.TaskCancellation;
 import com.nageoffer.ai.ragent.framework.context.UserContext;
 import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
+import com.nageoffer.ai.ragent.framework.web.StreamTaskManager;
 import com.nageoffer.ai.ragent.infra.chat.ForwardingStreamCallback;
 import com.nageoffer.ai.ragent.infra.chat.StreamCallback;
 import com.nageoffer.ai.ragent.rag.config.RagTraceProperties;
@@ -30,6 +31,7 @@ import com.nageoffer.ai.ragent.rag.dao.entity.RagTraceRunDO;
 import com.nageoffer.ai.ragent.rag.service.RagTraceRecordService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Date;
@@ -54,6 +56,9 @@ public class StreamChatTraceRunner {
     private final RagTraceProperties traceProperties;
     private final RagTraceRecordService traceRecordService;
 
+    @Autowired
+    private StreamTaskManager taskManager;
+
     /**
      * @param businessLogic 接收 trace 增强后的 callback：onComplete / onError 会触发 finishRun
      *                      实现方负责把该 callback 注入到 pipeline 上下文中并触发 pipeline 执行
@@ -70,7 +75,8 @@ public class StreamChatTraceRunner {
 
         String traceId = IdUtil.getSnowflakeNextIdStr();
         long startMillis = System.currentTimeMillis();
-        traceRecordService.startRun(RagTraceRunDO.builder()
+        try {
+            traceRecordService.startRun(RagTraceRunDO.builder()
                 .traceId(traceId)
                 .traceName(TRACE_NAME)
                 .entryMethod(ENTRY_METHOD)
@@ -79,11 +85,19 @@ public class StreamChatTraceRunner {
                 .userId(UserContext.getUserId())
                 .status(STATUS_RUNNING)
                 .startTime(new Date())
-                .extraData(JSONUtil.createObj()
-                        .set("questionLength", StrUtil.length(question))
-                        .set("question", question)
-                        .toString())
+                .extraData(new RagTraceSerializer(traceProperties).serialize(RagTraceData.map(
+                        "schemaVersion", 1, "stage", TRACE_NAME,
+                        "questionLength", StrUtil.length(question), "question", question)))
                 .build());
+        } catch (Exception failure) {
+            log.warn("Trace startRun failed, taskId={}", taskId, failure);
+            runWithoutTrace(conversationId, taskId, callback, businessLogic);
+            return;
+        }
+        // Cancellation may have completed while this request was still waiting in the queue.
+        if (taskManager != null && taskManager.isCancelled(taskId)) {
+            finishRun(traceId, false, new java.util.concurrent.CancellationException("Task cancelled before trace start"), startMillis);
+        }
 
         Date runStartTime = new Date(startMillis);
         StreamCallback traceAwareCallback = new ForwardingStreamCallback(callback) {
@@ -145,7 +159,7 @@ public class StreamChatTraceRunner {
         try {
             traceRecordService.finishRun(
                     traceId,
-                    success ? STATUS_SUCCESS : STATUS_ERROR,
+                    TaskCancellation.isCancellation(error) ? "CANCELLED" : success ? STATUS_SUCCESS : STATUS_ERROR,
                     success ? null : truncateError(error),
                     new Date(),
                     System.currentTimeMillis() - startMillis
@@ -172,7 +186,7 @@ public class StreamChatTraceRunner {
             return null;
         }
         String message = throwable.getClass().getSimpleName() + ": " + StrUtil.blankToDefault(throwable.getMessage(), "");
-        int max = traceProperties.getMaxErrorLength();
+        int max = Math.max(0, traceProperties.getMaxErrorLength());
         return message.length() <= max ? message : message.substring(0, max);
     }
 }

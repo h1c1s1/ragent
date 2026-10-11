@@ -30,6 +30,13 @@ public final class RagTraceContext {
 
     private static final TransmittableThreadLocal<String> TRACE_ID = new TransmittableThreadLocal<>();
     private static final TransmittableThreadLocal<String> TASK_ID = new TransmittableThreadLocal<>();
+    private static final TransmittableThreadLocal<String> SUB_QUESTION_ID = new TransmittableThreadLocal<>();
+    private static final TransmittableThreadLocal<Deque<RagTraceObservation>> OBSERVATIONS = new TransmittableThreadLocal<>() {
+        @Override
+        public Deque<RagTraceObservation> copy(Deque<RagTraceObservation> parent) {
+            return parent == null ? null : new ArrayDeque<>(parent);
+        }
+    };
     // 父线程 -> 子线程的 NODE_STACK 必须深拷贝
     // 默认 copy() 返回父值引用，并发子任务会共用同一个 Deque，
     // 互相 push/pop 时父子节点 ID 串挂，trace 层级紊乱
@@ -45,6 +52,75 @@ public final class RagTraceContext {
 
     public static String getTraceId() {
         return TRACE_ID.get();
+    }
+
+    public static String getSubQuestionId() { return SUB_QUESTION_ID.get(); }
+
+    public static Scope withSubQuestion(String id) {
+        String previous = SUB_QUESTION_ID.get();
+        SUB_QUESTION_ID.set(id);
+        return () -> { if (previous == null) SUB_QUESTION_ID.remove(); else SUB_QUESTION_ID.set(previous); };
+    }
+
+    public static Scope withTrace(String traceId, String taskId) {
+        String previousTrace = TRACE_ID.get();
+        String previousTask = TASK_ID.get();
+        String previousQuestion = SUB_QUESTION_ID.get();
+        Deque<String> previousNodes = NODE_STACK.get();
+        Deque<RagTraceObservation> previousObservations = OBSERVATIONS.get();
+        clear();
+        TRACE_ID.set(traceId);
+        if (taskId != null) TASK_ID.set(taskId);
+        return () -> {
+            clear();
+            if (previousTrace != null) TRACE_ID.set(previousTrace);
+            if (previousTask != null) TASK_ID.set(previousTask);
+            if (previousQuestion != null) SUB_QUESTION_ID.set(previousQuestion);
+            if (previousNodes != null) NODE_STACK.set(previousNodes);
+            if (previousObservations != null) OBSERVATIONS.set(previousObservations);
+        };
+    }
+
+    public static Scope activate(RagTraceObservation observation) {
+        if (observation == null) return () -> { };
+        Deque<String> previousNodes = NODE_STACK.get();
+        Deque<RagTraceObservation> previousObservations = OBSERVATIONS.get();
+        Deque<String> nodes = previousNodes == null ? new ArrayDeque<>() : new ArrayDeque<>(previousNodes);
+        Deque<RagTraceObservation> observations = previousObservations == null
+                ? new ArrayDeque<>() : new ArrayDeque<>(previousObservations);
+        nodes.push(observation.nodeId());
+        observations.push(observation);
+        NODE_STACK.set(nodes);
+        OBSERVATIONS.set(observations);
+        return () -> {
+            if (previousNodes == null) NODE_STACK.remove(); else NODE_STACK.set(previousNodes);
+            if (previousObservations == null) OBSERVATIONS.remove(); else OBSERVATIONS.set(previousObservations);
+        };
+    }
+
+    private static RagTraceObservation currentObservation() {
+        Deque<RagTraceObservation> observations = OBSERVATIONS.get();
+        RagTraceObservation observation = observations == null ? null : observations.peek();
+        return observation != null && observation.nodeId().equals(currentNodeId()) ? observation : null;
+    }
+
+    public static int captureLimit() {
+        RagTraceObservation observation = currentObservation();
+        return observation == null ? 0 : observation.maxItems();
+    }
+
+    public static void record(String section, Object value) {
+        RagTraceObservation observation = currentObservation();
+        if (observation != null) observation.record(section, value);
+    }
+
+    public static void event(String outcome, String reason) {
+        RagTraceObservation observation = currentObservation();
+        if (observation != null) observation.event(outcome, reason);
+    }
+
+    public interface Scope extends AutoCloseable {
+        @Override void close();
     }
 
     public static void setTraceId(String traceId) {
@@ -93,5 +169,7 @@ public final class RagTraceContext {
         TRACE_ID.remove();
         TASK_ID.remove();
         NODE_STACK.remove();
+        OBSERVATIONS.remove();
+        SUB_QUESTION_ID.remove();
     }
 }

@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nageoffer.ai.ragent.framework.convention.RetrievedChunk;
+import com.nageoffer.ai.ragent.framework.trace.RagTraceContext;
 import com.nageoffer.ai.ragent.rag.config.GraphProperties;
 import com.nageoffer.ai.ragent.rag.config.SearchChannelProperties;
 import lombok.extern.slf4j.Slf4j;
@@ -86,6 +87,7 @@ public class LightRagClient {
      */
     public GraphEvidence retrieveByScope(String question, String mode, int topK, Collection<String> collections) {
         if (StrUtil.isBlank(question)) {
+            RagTraceContext.event("SKIPPED", "EMPTY_GRAPH_QUERY");
             return GraphEvidence.empty();
         }
         try {
@@ -99,8 +101,10 @@ public class LightRagClient {
                 body.put("top_k", topK);
             }
             JsonNode root = postQuery(body);
+            if (root == null) RagTraceContext.event("DEGRADED", "GRAPH_BACKEND_EMPTY_RESPONSE");
             return root != null ? parseReferences(root, collections) : GraphEvidence.empty();
         } catch (Exception e) {
+            RagTraceContext.event("DEGRADED", "GRAPH_BACKEND_ERROR: " + e.getClass().getSimpleName());
             log.warn("LightRAG 检索失败，降级为空结果: {}", e.getMessage());
             return GraphEvidence.empty();
         }
@@ -328,6 +332,7 @@ public class LightRagClient {
     private JsonNode execute(Request.Builder builder, String path, OkHttpClient client) throws Exception {
         try (Response response = client.newCall(builder.build()).execute()) {
             if (!response.isSuccessful()) {
+                if ("/query".equals(path)) RagTraceContext.event("DEGRADED", "GRAPH_HTTP_ERROR: " + response.code());
                 log.warn("LightRAG 请求失败 path={}, code={}", path, response.code());
                 return null;
             }

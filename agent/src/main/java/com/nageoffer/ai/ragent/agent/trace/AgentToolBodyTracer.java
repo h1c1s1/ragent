@@ -18,8 +18,8 @@
 package com.nageoffer.ai.ragent.agent.trace;
 
 import com.nageoffer.ai.ragent.agent.enums.AgentToolStatus;
-import com.nageoffer.ai.ragent.agent.tool.AgentToolExecutionFacts;
 import com.nageoffer.ai.ragent.agent.tool.AgentToolExecutionFacts.ToolFact;
+import com.nageoffer.ai.ragent.agent.tool.AgentToolExecutionFacts;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
@@ -43,6 +43,7 @@ import java.util.function.Supplier;
  * 这一点由 ragent.tool.span_scope=body 明说，别让读的人把它当成整次工具调用的耗时
  */
 public final class AgentToolBodyTracer {
+    public static final String KNOWLEDGE_PARENT_SPAN = "ragent_knowledge_parent_span";
 
     /**
      * 名字只留低基数的操作名与工具名，调用 ID 与状态一律进属性
@@ -102,7 +103,8 @@ public final class AgentToolBodyTracer {
                         if (ended.compareAndSet(false, true)) {
                             settleCancelled(span, facts, toolCallId);
                         }
-                    });
+                    })
+                    .contextWrite(context -> span == null ? context : context.put(KNOWLEDGE_PARENT_SPAN, span));
         });
     }
 

@@ -122,6 +122,7 @@ public class RagTraceQueryServiceImpl implements RagTraceQueryService {
                 .question(question)
                 .startTime(run.getStartTime())
                 .endTime(run.getEndTime())
+                .extraData(run.getExtraData())
                 .build();
     }
 
@@ -213,6 +214,7 @@ public class RagTraceQueryServiceImpl implements RagTraceQueryService {
                 .durationMs(node.getDurationMs())
                 .startTime(node.getStartTime())
                 .endTime(node.getEndTime())
+                .extraData(node.getExtraData())
                 .build();
     }
 }
